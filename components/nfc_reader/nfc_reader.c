@@ -7,32 +7,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-// Pinagem estabelecida
-#define PIN_NUM_MISO 19
-#define PIN_NUM_MOSI 23
-#define PIN_NUM_CLK  18
-#define PIN_NUM_CS   5
-#define PIN_NUM_RST  22
-
-// Registradores e Comandos do RC522 / Mifare
-#define CommandReg    0x01
-#define FIFODataReg   0x09
-#define FIFOLevelReg  0x0A
-#define BitFramingReg 0x0D
-#define ModeReg       0x11
-#define TxControlReg  0x14
-#define TModeReg      0x2A
-#define TPrescalerReg 0x2B
-#define TReloadRegH   0x2C
-#define TReloadRegL   0x2D
-
-#define PCD_RESETPHASE   0x0F
-#define PCD_TRANSCEIVE   0x0C
-#define PCD_AUTHENT      0x0E
-#define PICC_REQIDL      0x26
-#define PICC_ANTICOLL    0x93
-#define PICC_WRITE       0xA0
-
 // ---------------- Extern Declaration ----------------
 extern void handle_nfc_detection(uint8_t *uid);
 
@@ -257,4 +231,13 @@ bool nfc_reader_write_data(uint8_t block, uint8_t *data_16_bytes) {
 
     ESP_LOGE(TAG, "Falha na transmissão da gravação física.");
     return false;
+}
+
+
+void nfc_reader_pause(void) {
+    if (nfc_task_handle != NULL) vTaskSuspend(nfc_task_handle);
+}
+
+void nfc_reader_resume(void) {
+    if (nfc_task_handle != NULL) vTaskResume(nfc_task_handle);
 }

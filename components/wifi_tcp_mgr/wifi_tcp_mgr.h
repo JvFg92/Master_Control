@@ -3,10 +3,12 @@
 
 // Respostas possíveis para o remetente
 typedef enum {
-    TCP_REPLY_ACK,   // "mensagem recebida (ACK)"
-    TCP_REPLY_RECD,  // "reconhecido (recd)"
-    TCP_REPLY_NRECD, // "não reconhecido (nrecd)"
-    TCP_REPLY_NPLT   // "not a planet (nplt)"
+    TCP_REPLY_ACK,   
+    TCP_REPLY_RECD,  
+    TCP_REPLY_NRECD, 
+    TCP_REPLY_NPLT,  
+    TCP_REPLY_TIMEOUT, // "tempo esgotado (timeout)"
+    TCP_REPLY_BUSY     // "sistema ocupado (busy)"
 } tcp_reply_t;
 
 void wifi_tcp_init(void);

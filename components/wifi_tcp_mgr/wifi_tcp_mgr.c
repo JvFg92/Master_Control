@@ -7,6 +7,7 @@
 #include "nvs_flash.h"
 #include "lwip/sockets.h"
 #include "wifi_tcp_mgr.h"
+#include <netinet/tcp.h> // Necessário para TCP_NODELAY
 
 // ---------------- Extern Declaration ----------------
 
@@ -29,10 +30,12 @@ void tcp_send_reply(tcp_reply_t reply_type) {
 
     const char* msg = "";
     switch (reply_type) {
-        case TCP_REPLY_ACK:   msg = "mensagem recebida (ACK)\n"; break;
-        case TCP_REPLY_RECD:  msg = "reconhecido (recd)\n"; break;
-        case TCP_REPLY_NRECD: msg = "nao reconhecido (nrecd)\n"; break;
-        case TCP_REPLY_NPLT:  msg = "not a planet (nplt)\n"; break;
+        case TCP_REPLY_ACK:     msg = "mensagem recebida (ACK)\n"; break;
+        case TCP_REPLY_RECD:    msg = "reconhecido (recd)\n"; break;
+        case TCP_REPLY_NRECD:   msg = "nao reconhecido (nrecd)\n"; break;
+        case TCP_REPLY_NPLT:    msg = "not a planet (nplt)\n"; break;
+        case TCP_REPLY_TIMEOUT: msg = "tempo esgotado (timeout)\n"; break;
+        case TCP_REPLY_BUSY:    msg = "sistema ocupado (busy)\n"; break;
     }
     
     send(active_sock, msg, strlen(msg), 0);
@@ -63,6 +66,9 @@ static void tcp_server_task(void *pvParameters) {
         // Fica travado aqui aguardando o PC se conectar
         int sock = accept(listen_sock, (struct sockaddr *)&source_addr, &addr_len);
         if (sock < 0) continue;
+
+        int flag = 1;
+        setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int));
 
         ESP_LOGI(TAG, "Computador conectado!");
         active_sock = sock;

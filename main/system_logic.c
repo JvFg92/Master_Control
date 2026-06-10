@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "driver/uart.h"
 #include "esp_log.h"
+#include "freertos/timers.h"
 
 #include "system_logic.h"
 #include "led_ctrl.h"
@@ -13,19 +14,30 @@
 #include "storage_mgr.h"
 
 static const char *TAG = "SYSTEM_LOGIC";
+static TimerHandle_t leitura_timer = NULL;
 
-// Máquina de estados interna
-typedef enum {
-    STATE_NORMAL,
-    STATE_RECORD_GET_PLANET,
-    STATE_RECORD_WAIT_NFC
-} system_state_t;
 
-static system_state_t current_state = STATE_NORMAL;
-static char requested_planet[32] = "";
+
+// ✅ DEIXE APENAS ISTO NO system_logic.c (além dos seus outros includes e variáveis globais)
+static system_state_t current_state = STATE_IDLE;static char requested_planet[32] = "";
 static char target_record_planet[32] = "";
 static int failed_attempts = 0;
 static uint8_t last_serialized_uid[5] = {0};
+
+
+void system_logic_init(void) {
+    leitura_timer = xTimerCreate(
+        "LeituraTimeoutTimer",
+        pdMS_TO_TICKS(30000), // 30 segundos
+        pdFALSE,              // pdFALSE faz o timer rodar apenas uma vez (one-shot)
+        (void *)0,
+        leitura_timeout_callback
+    );
+    
+    if (leitura_timer == NULL) {
+        ESP_LOGE(TAG, "FALHA CRÍTICA: Não foi possível alocar o Timer do FreeRTOS!");
+    }
+}
 
 // Função interna auxiliar para converter strings para maiúsculas
 static void string_to_uppercase(char *str) {
@@ -60,20 +72,36 @@ void process_pc_command(const char* command, char* response_buffer, size_t max_r
     strncpy(cmd_copy, command, sizeof(cmd_copy));
     cmd_copy[strcspn(cmd_copy, "\r\n")] = 0;
 
+   if (current_state == STATE_RECORD_GET_PLANET || current_state == STATE_RECORD_WAIT_NFC || current_state == STATE_MINIGAME) {
+        snprintf(response_buffer, max_resp_len, "ERRO:ESP32 Ocupado\n");
+        tcp_send_reply(TCP_REPLY_BUSY);
+        return;
+    } 
+
     if (strncmp(cmd_copy, "BUSCA:", 6) == 0) {
-        if (current_state == STATE_NORMAL) {
+        if (current_state == STATE_IDLE) {
+            iniciar_timer_leitura();
             strncpy(requested_planet, cmd_copy + 6, sizeof(requested_planet));
             string_to_uppercase(requested_planet);
             failed_attempts = 0;
+           current_state = STATE_READING_NFC;
             
-            ESP_LOGI(TAG, "Requisitada busca via TCP pelo planeta: %s.", requested_planet);
-            snprintf(response_buffer, max_resp_len, "BUSCANDO:%s\n", requested_planet);
+            // Proteção: Só inicia se o timer tiver sido criado com sucesso
+            if (leitura_timer != NULL) {
+                xTimerStart(leitura_timer, 0);
+            } else {
+                ESP_LOGE(TAG, "Erro: Tentativa de iniciar um timer nulo!");
+            }
+             snprintf(response_buffer, max_resp_len, "BUSCANDO:%s\n", requested_planet);
+             
         } else {
             snprintf(response_buffer, max_resp_len, "ERRO:ESP32 em Modo de Gravacao Serial\n");
         }
     } else {
         snprintf(response_buffer, max_resp_len, "COMANDO_INVALIDO\n");
     }
+    xTimerStop(leitura_timer, 0);
+    current_state = STATE_IDLE;
 }
 
 // Executado em background pelo nfc_reader ao detectar uma Tag
@@ -98,7 +126,7 @@ void handle_nfc_detection(uint8_t *uid) {
         return;
     }
 
-    if (current_state == STATE_NORMAL && strlen(requested_planet) > 0) {
+    if (current_state == STATE_IDLE && strlen(requested_planet) > 0) {
         char detected_planet_name[32] = "";
         bool found = find_planet_by_uid(uid_str, detected_planet_name, sizeof(detected_planet_name));
 
@@ -161,8 +189,8 @@ void serial_monitor_task(void *pvParameters) {
             string_to_uppercase(input);
 
             if (strcmp(input, "END") == 0) {
-                if (current_state != STATE_NORMAL) {
-                    current_state = STATE_NORMAL;
+                if (current_state != STATE_IDLE) {
+                    current_state = STATE_IDLE;
                     target_record_planet[0] = '\0';
                     memset(last_serialized_uid, 0, sizeof(last_serialized_uid));
                     printf("\n[AVISO] Modo de gravacao encerrado. Retornando ao Modo Normal.\n");
@@ -171,7 +199,7 @@ void serial_monitor_task(void *pvParameters) {
                 }
             }
             else if (strcmp(input, "GRAVAR") == 0) {
-                if (current_state == STATE_NORMAL) {
+                if (current_state == STATE_IDLE) {
                     current_state = STATE_RECORD_GET_PLANET;
                     printf("\n[MODO GRAVACAO] Digite o nome do planeta: ");
                     fflush(stdout);
@@ -179,6 +207,21 @@ void serial_monitor_task(void *pvParameters) {
                     printf("\nO sistema ja esta executando uma rotina de gravacao.\n");
                 }
             }
+
+
+                else if (strcmp(input, "PROXIMO") == 0) {
+                if (current_state == STATE_RECORD_WAIT_NFC) {
+                    current_state = STATE_RECORD_GET_PLANET;
+                    target_record_planet[0] = '\0';
+                    memset(last_serialized_uid, 0, sizeof(last_serialized_uid));
+                    printf("\n[MODO GRAVACAO] Digite o nome do proximo planeta: ");
+                    fflush(stdout);
+                } else {
+                    printf("\nO comando 'PROXIMO' so pode ser usado enquanto voce esta vinculando tags.\n");
+                }
+            }
+
+
             else if (strlen(input) > 0) {
                 if (current_state == STATE_RECORD_GET_PLANET) {
                     strncpy(target_record_planet, input, sizeof(target_record_planet));
@@ -189,7 +232,7 @@ void serial_monitor_task(void *pvParameters) {
                     printf("Aproxime as tags NFC ao leitor agora para vincula-las...\n");
                     printf("Envie 'END' a qualquer momento para fechar o loop.\n");
                 } 
-                else if (current_state == STATE_NORMAL) {
+                else if (current_state == STATE_IDLE) {
                     printf("\nComando desconhecido. Digite 'GRAVAR' para configurar.\n");
                 }
             }
@@ -198,4 +241,26 @@ void serial_monitor_task(void *pvParameters) {
     }
     free(data);
     vTaskDelete(NULL);
+}
+
+void leitura_timeout_callback(TimerHandle_t xTimer) {
+    if (current_state == STATE_READING_NFC) {
+        ESP_LOGE(TAG, "Timeout de 30s atingido. Nenhuma tag correta lida.");
+        tcp_send_reply(TCP_REPLY_TIMEOUT);
+        
+        current_state = STATE_IDLE;
+        requested_planet[0] = '\0';
+        servo_set_angle(SERVO_1, 180); 
+        led_ctrl_set_state(false);
+    }
+}
+
+void init_timers(void) {
+    leitura_timer = xTimerCreate("LeituraTimer", pdMS_TO_TICKS(30000), pdFALSE, (void *)0, leitura_timeout_callback);
+}
+
+void iniciar_timer_leitura(void) {
+    if (leitura_timer != NULL) {
+        xTimerStart(leitura_timer, 0);
+    }
 }

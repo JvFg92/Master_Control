@@ -16,6 +16,7 @@ void app_main(void) {
     servo_ctrl_init();
     storage_init();
     nfc_reader_init();
+    system_logic_init();
     vTaskDelay(pdMS_TO_TICKS(300));
     wifi_tcp_init(); 
     
